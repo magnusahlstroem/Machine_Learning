@@ -1,0 +1,110 @@
+---
+title: "Project Assignment Machine Learning"
+author: "MGA"
+date: "26 jul 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F, fig.align = "center")
+```
+
+
+##Datamanipulation
+Since the quiz test dataset only consist of non-summary data, I chose to exclude the variables with more than 95% NAs.
+To save time in building the rapport i have first retrieved the data in an normal R session and saved it, and here I load the dataset.
+```{r}
+library(dplyr); library(ggplot2); library(caret)
+#main <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+#                     stringsAsFactors = F,
+#                     na.strings = c("NA", ""))
+#save(main, file = "C:/Kurser/Machine_Learning/main.Rdata")
+load("C:/Kurser/Machine_Learning/main.Rdata")
+
+#Identifying variables with more than 95% NAs, these are for practical purposes the summary variables that are all NAs in the samples for the final quiz.
+manyNAs <- unname(which(sapply(main, function(x) sum(is.na(x))) >= 0.95 * nrow(main)))
+main <- main[,-manyNAs]
+
+#A litt´le more manipulation
+main2 <- main %>%
+  select(-X, -cvtd_timestamp) %>%
+  mutate(user_name = as.factor(user_name),
+         classe = as.factor(classe),
+         new_window = as.factor(new_window),
+         #raw_timestamp_part_2 = as.character(raw_timestamp_part_2),
+         raw_timestamp_part_1 = substr(raw_timestamp_part_1, 7, 10),
+         raw_timestamp_part_2 = ifelse(nchar(raw_timestamp_part_2) < 6, 
+                                       paste0(do.call(paste0, as.list(rep("0", 3))), raw_timestamp_part_2),
+                                       raw_timestamp_part_2),
+         raw_timestamp_part_2 = substr(raw_timestamp_part_2, 
+                                       nchar(raw_timestamp_part_2)-5, 
+                                       nchar(raw_timestamp_part_2)),
+         time_stamp = paste(raw_timestamp_part_1, substr(raw_timestamp_part_2, 1, 5), sep = "."),
+         time_stamp = as.numeric(time_stamp)) %>%
+  select(-raw_timestamp_part_1, -raw_timestamp_part_2) %>%
+  group_by(user_name, classe) %>%
+  mutate(time_stamp = time_stamp - min(time_stamp)) %>%
+  ungroup()
+
+set.seed(26062018)
+inTrain <- createDataPartition(main$classe, p = 0.80, list = F)
+
+training <- main2[inTrain,]
+```
+
+##Plotting the variables
+The below figure shows one variable (total_accel_belt) vs. time. All variables show the same type of pattern, a sinusoidal curve, in some of the classes and a more or less flat line i the others. It looks like there is a very time dependant strukture in the data, and also the relationship is non-linar.
+```{r}
+ggplot(data = training, aes(y = total_accel_belt, x = time_stamp, color = classe)) + 
+  geom_line() + 
+  facet_wrap(~user_name, ncol = 2) + 
+  labs(title = "Total belt accelation vs. time",
+       x = "Time",
+       y = "Total belt accelation")
+```
+
+##Accuracy vs. interpretability
+In order to decrease computation time and increase accuracy i chose to run a principle components analysis on my data prior to fitting my random forest algorithm. The variables are already quite difficult to interpret, so the accuracy/interpretability trade-off is not a big problem.
+```{r}
+pcaObj <- preProcess(x = training[-c(1:3, 56:57)], method = "pca")
+
+trainingPca <- predict(pcaObj, training) %>%
+  select(-(user_name:num_window), -time_stamp)
+```
+
+##Fitting the model
+Because of time-consumption issues, i have run the model in an R-session, saved it and then load it here in the Rmarkdown.
+I have fitted a randomforest algorithm with 10 fold cross-validation.
+```{r}
+#fit1 <- train(classe ~ ., data = trainingPca, method = "rf", trControl = trainControl(method = "cv", number = 10))
+#save(fit1, file = "C:/Kurser/Machine_Learning/fit1.Rdata")
+load("C:/Kurser/Machine_Learning/fit1.Rdata")
+fit1
+```
+I use the default metric (Accuracy) to select the optimal with model with regards to number of candidates at each split. The final model chose 2 randomly selected variables to be candidates at each split. The final accuracy on the training set is `r paste(round(fit1$results$Accuracy[1], 3)*100, "%", sep = "")`.
+
+##Out of sample error
+Finally i construct my test-set based on the principle components analysis performed earlier, predict the classes based on the test-set and calculate the accuracy and thereby get an estimate of the real predictive performance of my algorithm.
+```{r}
+testing <- main2[-inTrain,]
+
+testingPca <- predict(pcaObj, testing) %>%
+  select(-(user_name:num_window), -time_stamp)
+
+conf_test <- confusionMatrix(testingPca$classe, predict(fit1, testingPca))
+```
+
+#Confusion matrix and accuracy - test set
+```{r}
+knitr::kable(as.matrix(conf_test)/apply(conf_test$table, 2, sum))
+```
+
+```{r}
+conf_test$overall[1]
+```
+The accuracy based on the test set is `r paste(round(conf_test$overall[1], 3)*100, "%", sep = "")`, ie. higher than the accuracy from the training set which is a little strange, I dont have an explanation for this.
+
+
+
